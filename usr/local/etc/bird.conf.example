@@ -1,0 +1,176 @@
+define ip4 = HOST_NODE_IPV4_ADDRESS;
+define ip6 = HOST_NODE_IPV6_ADDRESS;
+
+log syslog all;
+router id ip4;
+debug protocols { events, states };
+watchdog warning 5 s;
+watchdog timeout 30 s;
+ipv4 table master4;
+ipv6 table master6;
+
+protocol device device1 {
+	scan time 900;
+}
+
+protocol direct direct1 {
+	ipv4;
+	ipv6;
+}
+
+protocol kernel kernel4 {
+	scan time 900;
+	learn on;
+	merge paths on;
+	ipv4 {
+		table master4;
+		import all;
+		export filter {
+			if proto ~ "device1" then reject;
+			if proto ~ "direct1" then reject;
+			krt_prefsrc = ip4;
+			accept;
+		};
+	};
+	learn;
+}
+
+protocol kernel kernel6 {
+	scan time 900;
+	learn on;
+	merge paths on;
+	ipv6 {
+		table master6;
+		import all;
+		export filter {
+			if proto ~ "device1" then reject;
+			if proto ~ "direct1" then reject;
+			krt_prefsrc = ip6;
+			accept;
+		};
+	};
+	learn;
+}
+
+protocol static static4 {
+	ipv4 {
+		preference 500;
+	};
+	route 192.0.2.0/24 blackhole;
+}
+
+protocol static static6 {
+	ipv6 {
+		preference 500;
+	};
+	route 2001:db8::/32 blackhole;
+}
+
+filter upstream_out_filter {
+	if proto ~ "isp1_4" then reject;
+	if proto ~ "isp2_4" then reject;
+	if proto ~ "isp1_6" then reject;
+	if proto ~ "isp2_6" then reject;
+	if proto ~ "device1" then reject;
+	if proto ~ "direct1" then reject;
+	if proto ~ "kernel4" then reject;
+	if proto ~ "kernel6" then reject;
+	#if proto ~ "static4" then reject;
+	accept;
+}
+
+filter downstream_out_filter {
+	if proto ~ "device1" then reject;
+	if proto ~ "direct1" then reject;
+	if proto ~ "kernel4" then reject;
+	if proto ~ "kernel6" then reject;
+	if net.maxlen = 128 then { bgp_next_hop = ip6; }
+	if net.maxlen = 32 then { bgp_next_hop = ip4; }
+	accept;
+}
+
+filter downstream_out_filter_4 {
+	if proto ~ "device1" then reject;
+	if proto ~ "direct1" then reject;
+	if proto ~ "kernel4" then reject;
+	if proto ~ "kernel6" then reject;
+	bgp_next_hop = ip4;
+	accept;
+}
+
+filter downstream_out_filter_6 {
+	if proto ~ "device1" then reject;
+	if proto ~ "direct1" then reject;
+	if proto ~ "kernel4" then reject;
+	if proto ~ "kernel6" then reject;
+	bgp_next_hop = ip6;
+	accept;
+}
+
+template bgp isp {
+	local as 65500;
+	neighbor as 12345;
+	ipv4 {
+		next hop self;
+		preference 100;
+		import all;
+		export filter upstream_out_filter;
+	};
+	ipv6 {
+		next hop self;
+		preference 100;
+		import all;
+		export filter upstream_out_filter;
+	};
+}
+
+protocol bgp isp1_4 from isp {
+	neighbor NEIGHBOR_1_IPV4_ADDRESS;
+}
+
+protocol bgp isp2_4 from isp {
+	neighbor NEIGHBOR_2_IPV4_ADDRESS;
+}
+
+protocol bgp isp1_6 from isp {
+	neighbor NEIGHBOR_1_IPV6_ADDRESS;
+}
+
+protocol bgp isp2_6 from isp {
+	neighbor NEIGHBOR_2_IPV6_ADDRESS;
+}
+
+filter upstream_out_filter_ddos {
+	if proto ~ "isp1_4" then reject;
+	if proto ~ "isp2_4" then reject;
+	if proto ~ "isp1_6" then reject;
+	if proto ~ "isp2_6" then reject;
+	if proto ~ "device1" then reject;
+	if proto ~ "direct1" then reject;
+	if proto ~ "kernel4" then reject;
+	if proto ~ "kernel6" then reject;
+	#if proto ~ "static4" then accept;
+	reject;
+}
+
+template bgp vm {
+	local as 65500;
+	passive on;
+	multihop 1;
+	ipv4 {
+		add paths tx;
+		preference 200;
+		import none;
+		export filter downstream_out_filter_4;
+		#next hop address ip4;
+	};
+	ipv6 {
+		add paths tx;
+		preference 200;
+		import none;
+		export filter downstream_out_filter_6;
+		#next hop address ip6;
+	};
+}
+
+include "/run/bird/*.conf";

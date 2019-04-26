@@ -1,0 +1,2 @@
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="tap*i*", RUN="/opt/scripts/pvecloudfw.sh"
+SUBSYSTEM=="net", ACTION=="remove", KERNEL=="tap*i*", RUN="/opt/scripts/pvecloudfw.sh"
