@@ -37,7 +37,7 @@ link_local() {
 }
 
 add() {
-	ipset list "${vmid}v4" 1> /dev/null 2> /dev/null && remove
+	ipset list "${vmid}v4" 1> /dev/null 2> /dev/null && remove refresh
 	ipconfig=$(echo "${config}" | grep -E '^ipconfig[0-9]+: ' | cut -d' ' -f2 | tr ',=' '\n ')
 	ipconfig_ips=$(echo "${ipconfig}" | grep -E '^ip[46]? ' | cut -d' ' -f2)
 	comment_ips=$(echo "${config}" | grep -E '^#ip[46]? ' | cut -d' ' -f2)
@@ -101,7 +101,7 @@ add() {
 	fi
 	ipset create "${vmid}v4" hash:net
 	ipset create "${vmid}v6" hash:net family inet6
-	ip address flush dev "tap${vmid}i0"
+	#ip address flush dev "tap${vmid}i0"
 	for ip in ${ips}; do
 		#ip=$(urldecode "${ip}")
 		prefix=$(echo "${ip}" | cut -d/ -f2)
@@ -111,7 +111,7 @@ add() {
 			ipset add "${vmid}v4" "${ip}/32"
 			ebtables -t broute -A "from_${vmid}" -p IPv4 --ip-source "${ip}" -j redirect --redirect-target DROP
 			ip neighbour replace "${ip}" dev "${INTERFACE}" lladdr "${firstmac}" nud permanent
-			ip route replace "${ip}" dev "${INTERFACE}" src "${mysrcip}" pref high
+			ip route replace "${ip}" dev "${INTERFACE}" src "${mysrcip}" pref high scope link
 		elif echo "${ip}" | fgrep -q :; then
 			mysrcip="${mysrcip6}"
 			ipset add "${vmid}v6" "${ip}/56"
@@ -121,16 +121,16 @@ add() {
 	done
 	for gw in ${gw6}; do
 		test "${gw}" == "fe80::1" && continue
-		ip address add "${gw}/56" dev "tap${vmid}i0"
+		ip address add "${gw}/56" dev "tap${vmid}i0" scope link
 	done
 	for interface in "/sys/class/net/tap${vmid}i"*"/address"; do
 		interface=$(echo "${interface}" | cut -d/ -f5)
 		mac=$(cat "/sys/class/net/${interface}/address")
 		lla=$(link_local "${mac}")
-		ip address add "${lla}/64" dev "${interface}"
-		ip address add "fe80::1/128" dev "${interface}"
-		ip address add "169.254.169.254/32" dev "${interface}"
-		ip address add "fc00::179/128" dev "${interface}"
+		ip address add "${lla}/64" dev "${interface}" scope link
+		ip address add "fe80::1/128" dev "${interface}" scope link
+		ip address add "169.254.169.254/32" dev "${interface}" scope link
+		ip address add "fc00::179/128" dev "${interface}" scope link
 	done
 
 	#iptables -t raw -A "from_${vmid}" -m set ! --match-set "${vmid}v4" src -j LOG --log-prefix "iptables 1: "
@@ -182,8 +182,8 @@ add() {
 		ip4_prefixes=$(echo "${ip4_prefixes_list}" | grep -vE '^$' | awk -F/ '$2 <= 24 {print $1"/"$2"{"$2","$2"}"}' | tr '\n' ',' | sed 's/,$//')
 		ip6_prefixes=$(echo "${ip6_prefixes_list}" | grep -vE '^$' | awk -F/ '$2 <= 48 {print $1"/"$2"{"$2","$2"}"}' | tr '\n' ',' | sed 's/,$//')
 		ip4_filter="ipv4 { import none; };"
-		ip4_num=$(echo "${ip4_prefixes_list}" | wc -l)
-		ip6_num=$(echo "${ip6_prefixes_list}" | wc -l)
+		ip4_num=$(($(echo "${ip4_prefixes_list}" | wc -l)+10))
+		ip6_num=$(($(echo "${ip6_prefixes_list}" | wc -l)+10))
 		rrclient=""
 		pathfilter="bgp_path.len = 1 && bgp_path.last = ${asn}"
 		if test "${asn}" == "204136"; then
@@ -191,11 +191,11 @@ add() {
 			pathfilter="bgp_path.len = 0"
 		fi
 		if test -n "${ip4_prefixes}"; then
-			ip4_filter="ipv4 { import limit ${ip4_num} action restart; import filter { if (net ~ [${ip4_prefixes}] && ${pathfilter}) then accept; reject; }; };"
+			ip4_filter="ipv4 { import limit ${ip4_num} action restart; import filter AS${asn}; };"
 		fi
 		ip6_filter="ipv6 { import none; };"
 		if test -n "${ip6_prefixes}"; then
-			ip6_filter="ipv6 { import limit ${ip6_num} action restart; import filter { if (net ~ [${ip6_prefixes}] && ${pathfilter}) then accept; reject; }; };"
+			ip6_filter="ipv6 { import limit ${ip6_num} action restart; import filter AS${asn}; };"
 		fi
 		rrclient=""
 		for ip4_prefix in ${ip4_prefixes_array}; do
@@ -207,6 +207,17 @@ add() {
 			ebtables -t broute -A "from_${vmid}" -p IPv6 --ip6-source "${ip6_prefix}" -j redirect --redirect-target DROP
 		done
 		mkdir -p /run/bird/
+		(
+			echo "filter AS${asn} {"
+			if test -n "${ip4_prefixes}"; then
+				echo "if (net ~ [${ip4_prefixes}] && ${pathfilter}) then accept;"
+			fi
+			if test -n "${ip6_prefixes}"; then
+				echo "if (net ~ [${ip6_prefixes}] && ${pathfilter}) then accept;"
+			fi
+			echo "reject;"
+			echo "};"
+		) > "/run/bird/AS${asn}.conf.$$" && mv "/run/bird/AS${asn}.conf.$$" "/run/bird/AS${asn}.conf"
 		(
 			num=0
 			for ip in ${ips}; do
@@ -225,14 +236,17 @@ add() {
 				echo "}"
 				num="$((${num}+1))"
 			done
-		) > "/run/bird/${vmid}.conf"
+		) > "/run/bird/VM${vmid}.conf.$$" && mv "/run/bird/VM${vmid}.conf.$$" "/run/bird/VM${vmid}.conf"
+		pkill -HUP bird
+	elif test -f "/run/bird/VM${vmid}.conf"; then
+		rm "/run/bird/VM${vmid}.conf"
 		pkill -HUP bird
 	fi
 }
 
 remove() {
-	if test -f "/run/bird/${vmid}.conf"; then
-		rm "/run/bird/${vmid}.conf"
+	if test -f "/run/bird/VM${vmid}.conf" && test "${1}" != "refresh"; then
+		rm "/run/bird/VM${vmid}.conf"
 		pkill -HUP bird
 	fi
 	macs=$(echo "${config}" | grep -E '^net[0-9]+: ' | cut -d' ' -f2 | cut -d, -f1 | cut -d= -f2)
