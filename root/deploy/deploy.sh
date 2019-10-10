@@ -3,7 +3,7 @@
 basedir=$(dirname "${0}")
 cd "${basedir}"
 
-config_template="debian-9"
+config_template="debian-buster"
 config_name="$(shuf -n 1 names/left)-$(shuf -n 1 names/right)"
 config_memory="512"
 config_disksize="0"
@@ -26,6 +26,7 @@ config_gw6=""
 config_asn=""
 config_cpulimit=""
 config_balloon=""
+config_tail="n"
 
 config_id=100
 while test -f "/etc/pve/nodes/"*"/qemu-server/${config_id}.conf"; do
@@ -77,6 +78,7 @@ local ex_gw6=$(       printf "%50s" "[${config_gw6}]")
 local ex_legacydisk=$(printf "%50s" "[${config_legacydisk}]")
 local ex_asn=$(       printf "%50s" "[${config_asn}]")
 local ex_cpulimit=$(  printf "%50s" "[${config_cpulimit}]")
+local ex_tail=$(      printf "%50s" "[${config_tail}]")
 cat << EOF
 Usage: "${0}" [OPTIONS]
 ======================================================================
@@ -121,7 +123,7 @@ Usage: "${0}" [OPTIONS]
       --gw          VM IPv4 Gateway (example: 192.0.2.1)
                     Automatically assigned when using "auto"
                     ${ex_gw}
-      --ip6         VM IPv6/subnet (example: 2001:db8::/56)
+      --ip6         VM IPv6/subnet (example: fd1a:aee8::2/64)
                     "auto" to pick from config/ip6.txt
                     ${ex_ip6}
       --gw6         VM IPv6 Gateway (example: fe80::1)
@@ -134,6 +136,8 @@ Usage: "${0}" [OPTIONS]
                     ${ex_asn}
       --cpulimit    CPU limit (1 = 1 core, up to 128)
                     ${ex_cpulimit}
+      --tail        Connect to the instance serial console after boot
+                    ${ex_tail}
 EOF
 }
 
@@ -282,6 +286,12 @@ function parseoptions() {
 				[ "x${value}" == "x${1}" ] && value=""
 				[ "x${value}" == "x" ] && [ "x${2:0:1}" != "x-" ] && value="${2}" && shift
 				config_cpulimit="${value}"
+			;;
+			--tail|--tail=*)
+				value=$(parseoption "${1}")
+				[ "x${value}" == "x${1}" ] && value=""
+				[ "x${value}" == "x" ] && [ "x${2:0:1}" != "x-" ] && value="${2}" && shift
+				config_tail="${value}"
 			;;
 			*)
 				printhelp
@@ -432,6 +442,8 @@ fi
 #	exit 128
 #}
 
+ssh "root@${config_node}" rm -f "/var/lib/vz/images/${config_id}/vm-${config_id}-cloudinit.qcow2"
+
 ssh "root@${config_node}" qm start "${config_id}" || {
 	echo "Failed to start VM ${config_id}"
 	rbd rm "${config_pool}/vm-${rootdiskvmid}-${rootdiskuuid}"
@@ -442,4 +454,8 @@ ssh "root@${config_node}" qm start "${config_id}" || {
 
 echo "VM deployed successfully"
 
-echo ssh "root@${config_node}" socat "UNIX-CONNECT:/var/run/qemu-server/${config_id}.serial0" STDIO
+if test "${config_tail}" == "n"; then
+	echo ssh "root@${config_node}" socat "UNIX-CONNECT:/var/run/qemu-server/${config_id}.serial0" STDIO
+else
+	ssh "root@${config_node}" socat "UNIX-CONNECT:/var/run/qemu-server/${config_id}.serial0" STDIO
+fi

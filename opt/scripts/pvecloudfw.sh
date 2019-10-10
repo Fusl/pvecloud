@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -eu
+
 urldecode() {
 	local url_encoded="${1//+/ }"
 	printf '%b' "${url_encoded//%/\\x}"
@@ -93,8 +95,10 @@ add() {
 	ip6tables -t raw -A from_vms -i "${XINTERFACE}" -j "from_${vmid}"
 	ip6tables -t mangle -A to_vms -o "${XINTERFACE}" -j "to_${vmid}"
 
-	mysrcip4=$(ip r g 255.255.255.255 2> /dev/null | grep -oE 'src [0-9\.]{7,15}' | tr -s ' ' | cut -d' ' -f2)
-	mysrcip6=$(ip r g 2000:: 2> /dev/null | grep -oE 'src [a-f0-9:]+' | tr -s ' ' | cut -d' ' -f2)
+	#mysrcip4=$(ip r g 255.255.255.255 2> /dev/null | grep -oE 'src [0-9\.]{7,15}' | tr -s ' ' | cut -d' ' -f2)
+	#mysrcip6=$(ip r g 2000:: 2> /dev/null | grep -oE 'src [a-f0-9:]+' | tr -s ' ' | cut -d' ' -f2)
+	mysrcip4=$(cat /usr/local/etc/bird.conf | grep -E '^define ip4 = [0-9\.]+;$' | cut -d' ' -f4 | cut -d';' -f1)
+	mysrcip6=$(cat /usr/local/etc/bird.conf | grep -E '^define ip6 = [0-9a-f:]+;$' | cut -d' ' -f4 | cut -d';' -f1)
 	firstip=$(echo "${ips}" | head -n 1)
 	if echo "${firstip}" | fgrep -q .; then
 		defgw=$(echo "${firstip}" | cut -d. -f1-3).1
@@ -121,16 +125,16 @@ add() {
 	done
 	for gw in ${gw6}; do
 		test "${gw}" == "fe80::1" && continue
-		ip address add "${gw}/56" dev "tap${vmid}i0" scope link
+		ip address add "${gw}/56" dev "tap${vmid}i0" scope link || true
 	done
 	for interface in "/sys/class/net/tap${vmid}i"*"/address"; do
 		interface=$(echo "${interface}" | cut -d/ -f5)
 		mac=$(cat "/sys/class/net/${interface}/address")
 		lla=$(link_local "${mac}")
-		ip address add "${lla}/64" dev "${interface}" scope link
-		ip address add "fe80::1/128" dev "${interface}" scope link
-		ip address add "169.254.169.254/32" dev "${interface}" scope link
-		ip address add "fc00::179/128" dev "${interface}" scope link
+		ip address add "${lla}/64" dev "${interface}" scope link || true
+		ip address add "fe80::1/128" dev "${interface}" scope link || true
+		ip address add "169.254.169.254/32" dev "${interface}" scope link || true
+		ip address add "fc00::179/128" dev "${interface}" scope link || true
 	done
 
 	#iptables -t raw -A "from_${vmid}" -m set ! --match-set "${vmid}v4" src -j LOG --log-prefix "iptables 1: "
@@ -245,14 +249,14 @@ add() {
 }
 
 remove() {
-	if test -f "/run/bird/VM${vmid}.conf" && test "${1}" != "refresh"; then
+	if test -f "/run/bird/VM${vmid}.conf" && test "${1:-}" != "refresh"; then
 		rm "/run/bird/VM${vmid}.conf"
 		pkill -HUP bird
 	fi
 	macs=$(echo "${config}" | grep -E '^net[0-9]+: ' | cut -d' ' -f2 | cut -d, -f1 | cut -d= -f2)
 	firstmac=$(echo "${macs}" | head -n 1)
 	for mac in ${macs}; do
-		ebtables -t broute -D BROUTING -i "${XINTERFACE}" --logical-in vmbr0 -s "${mac}" -j "from_${vmid}"
+		ebtables -t broute -D BROUTING -i "${XINTERFACE}" --logical-in vmbr0 -s "${mac}" -j "from_${vmid}" || true
 	done
 	ebtables -t broute -F "from_${vmid}"
 	ebtables -t broute -X "from_${vmid}"

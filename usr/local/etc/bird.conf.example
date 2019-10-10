@@ -8,6 +8,19 @@ watchdog warning 5 s;
 watchdog timeout 30 s;
 ipv4 table master4;
 ipv6 table master6;
+roa4 table r4;
+roa6 table r6;
+
+protocol rpki rpki1 {
+	roa4 {
+		table r4;
+	};
+	roa6 {
+		table r6;
+	};
+	remote 127.0.0.1 port 3323;
+	transport tcp;
+}
 
 protocol device device1 {
 	scan time 900;
@@ -19,7 +32,7 @@ protocol direct direct1 {
 }
 
 protocol kernel kernel4 {
-	scan time 900;
+	scan time 15;
 	learn on;
 	merge paths on;
 	ipv4 {
@@ -36,7 +49,7 @@ protocol kernel kernel4 {
 }
 
 protocol kernel kernel6 {
-	scan time 900;
+	scan time 15;
 	learn on;
 	merge paths on;
 	ipv6 {
@@ -84,8 +97,8 @@ filter downstream_out_filter {
 	if proto ~ "direct1" then reject;
 	if proto ~ "kernel4" then reject;
 	if proto ~ "kernel6" then reject;
-	if net.maxlen = 128 then { bgp_next_hop = ip6; }
-	if net.maxlen = 32 then { bgp_next_hop = ip4; }
+	if net.maxlen = 128 then { bgp_next_hop = fc00::179; }
+	if net.maxlen = 32 then { bgp_next_hop = 169.254.169.254; }
 	accept;
 }
 
@@ -94,7 +107,7 @@ filter downstream_out_filter_4 {
 	if proto ~ "direct1" then reject;
 	if proto ~ "kernel4" then reject;
 	if proto ~ "kernel6" then reject;
-	bgp_next_hop = ip4;
+	bgp_next_hop = 169.254.169.254;
 	accept;
 }
 
@@ -103,7 +116,23 @@ filter downstream_out_filter_6 {
 	if proto ~ "direct1" then reject;
 	if proto ~ "kernel4" then reject;
 	if proto ~ "kernel6" then reject;
-	bgp_next_hop = ip6;
+	bgp_next_hop = fc00::179;
+	accept;
+}
+
+filter upstream_in_filter4 {
+	if (roa_check(r4, net, bgp_path.last) = ROA_INVALID) then {
+		print "Ignore invalid ROA ", net, " for ASN ", bgp_path.last;
+		reject;
+	}
+	accept;
+}
+
+filter upstream_in_filter6 {
+	if (roa_check(r6, net, bgp_path.last) = ROA_INVALID) then {
+		print "Ignore invalid ROA ", net, " for ASN ", bgp_path.last;
+		reject;
+	}
 	accept;
 }
 
@@ -113,13 +142,15 @@ template bgp isp {
 	ipv4 {
 		next hop self;
 		preference 100;
-		import all;
+		import keep filtered on;
+		import filter upstream_in_filter4;
 		export filter upstream_out_filter;
 	};
 	ipv6 {
 		next hop self;
 		preference 100;
-		import all;
+		import keep filtered on;
+		import filter upstream_in_filter6;
 		export filter upstream_out_filter;
 	};
 }
