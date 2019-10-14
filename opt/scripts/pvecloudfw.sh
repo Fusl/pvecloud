@@ -40,20 +40,21 @@ link_local() {
 
 add() {
 	ipset list "${vmid}v4" 1> /dev/null 2> /dev/null && remove refresh
-	ipconfig=$(echo "${config}" | grep -E '^ipconfig[0-9]+: ' | cut -d' ' -f2 | tr ',=' '\n ')
-	ipconfig_ips=$(echo "${ipconfig}" | grep -E '^ip[46]? ' | cut -d' ' -f2)
-	comment_ips=$(echo "${config}" | grep -E '^#ip[46]? ' | cut -d' ' -f2)
+	ipconfig=$(echo "${config}" | grep -E '^ipconfig[0-9]+: ' | cut -d' ' -f2 | tr ',=' '\n ' || true)
+	ipconfig_ips=$(echo "${ipconfig}" | grep -E '^ip[46]? ' | cut -d' ' -f2 || true)
+	comment_ips=$(echo "${config}" | grep -E '^#ip[46]? ' | cut -d' ' -f2 || true)
 	comment_ips=$(urldecode "${comment_ips}")
+	#md_ip_port=$(bash -c 'RANDOM='"${seed}"'; echo 127.$((${RANDOM}%256)).$((${RANDOM}%256)).$((${RANDOM}%256)) $((1024+((${RANDOM}+${RANDOM}+${RANDOM}+${RANDOM}+${RANDOM})%64512)))')
 	ips=$(
 		(
 			echo "${ipconfig_ips}"
 			echo "${comment_ips}"
-		) | grep -vE '^$' | sort -t/ -nk2,2 | sort -u -t/ -k1,1
+		) | grep -vE '^$' | sort -t/ -nk2,2 | sort -u -t/ -k1,1 || true
 	)
 	gw6=$(
-		echo "${ipconfig}" | grep -E '^gw6 ' | cut -d' ' -f2 | sort -u
+		echo "${ipconfig}" | grep -E '^gw6 ' | cut -d' ' -f2 | sort -u || true
 	)
-	macs=$(echo "${config}" | grep -E '^net[0-9]+: ' | cut -d' ' -f2 | cut -d, -f1 | cut -d= -f2)
+	macs=$(echo "${config}" | grep -E '^net[0-9]+: ' | cut -d' ' -f2 | cut -d, -f1 | cut -d= -f2 || true)
 	firstmac=$(echo "${macs}" | head -n 1)
 	echo -n "Waiting for interface activation"
 	while true; do
@@ -95,10 +96,8 @@ add() {
 	ip6tables -t raw -A from_vms -i "${XINTERFACE}" -j "from_${vmid}"
 	ip6tables -t mangle -A to_vms -o "${XINTERFACE}" -j "to_${vmid}"
 
-	#mysrcip4=$(ip r g 255.255.255.255 2> /dev/null | grep -oE 'src [0-9\.]{7,15}' | tr -s ' ' | cut -d' ' -f2)
-	#mysrcip6=$(ip r g 2000:: 2> /dev/null | grep -oE 'src [a-f0-9:]+' | tr -s ' ' | cut -d' ' -f2)
-	mysrcip4=$(cat /usr/local/etc/bird.conf | grep -E '^define ip4 = [0-9\.]+;$' | cut -d' ' -f4 | cut -d';' -f1)
-	mysrcip6=$(cat /usr/local/etc/bird.conf | grep -E '^define ip6 = [0-9a-f:]+;$' | cut -d' ' -f4 | cut -d';' -f1)
+	mysrcip4=$(cat /usr/local/etc/bird.conf | grep -E '^define ip4 = [0-9\.]+;$' | cut -d' ' -f4 | cut -d';' -f1 || ip r g 255.255.255.255 2> /dev/null | grep -oE 'src [0-9\.]{7,15}' | tr -s ' ' | cut -d' ' -f2)
+	mysrcip6=$(cat /usr/local/etc/bird.conf | grep -E '^define ip6 = [0-9a-f:]+;$' | cut -d' ' -f4 | cut -d';' -f1 || ip r g 2000:: 2> /dev/null | grep -oE 'src [a-f0-9:]+' | tr -s ' ' | cut -d' ' -f2)
 	firstip=$(echo "${ips}" | head -n 1)
 	if echo "${firstip}" | fgrep -q .; then
 		defgw=$(echo "${firstip}" | cut -d. -f1-3).1
@@ -176,15 +175,15 @@ add() {
 	ip6tables -t mangle -A "to_${vmid}" -p icmpv6 --icmpv6-type neighbour-solicitation -m hl --hl-eq 255 -j ACCEPT
 	ip6tables -t mangle -A "to_${vmid}" -p icmpv6 --icmpv6-type neighbour-advertisement -m hl --hl-eq 255 -j ACCEPT
 
-	asn=$(echo "${config}" | grep -E '^#[Aa][Ss] ?' | sed -r 's|^#[Aa][Ss] ?([0-9]+)$|\1|' | head -n 1)
+	asn=$(echo "${config}" | grep -E '^#[Aa][Ss] ?' | sed -r 's|^#[Aa][Ss] ?([0-9]+)$|\1|' | head -n 1 || true)
 	if test -n "${asn}"; then
-		prefixes=$(whois -h whois.radb.net -K -i origin "AS${asn}" | grep -E 'route6?:' | awk '{print $2}' | tr '[:upper:]' '[:lower:]' | grep -E '^[a-z0-9:\.]+/[0-9]{1,3}$' | sort -u)
-		ip4_prefixes_list=$(echo "${prefixes}" | fgrep .)
-		ip6_prefixes_list=$(echo "${prefixes}" | fgrep :)
+		prefixes=$(whois -h whois.radb.net -K -i origin "AS${asn}" | grep -E 'route6?:' | awk '{print $2}' | tr '[:upper:]' '[:lower:]' | grep -E '^[a-z0-9:\.]+/[0-9]{1,3}$' | sort -u || true)
+		ip4_prefixes_list=$(echo "${prefixes}" | fgrep . || true)
+		ip6_prefixes_list=$(echo "${prefixes}" | fgrep : || true)
 		ip4_prefixes_array=$(echo "${ip4_prefixes_list}" | tr '\n' ' ' | sed 's/ $//')
 		ip6_prefixes_array=$(echo "${ip6_prefixes_list}" | tr '\n' ' ' | sed 's/ $//')
-		ip4_prefixes=$(echo "${ip4_prefixes_list}" | grep -vE '^$' | awk -F/ '$2 <= 24 {print $1"/"$2"{"$2","$2"}"}' | tr '\n' ',' | sed 's/,$//')
-		ip6_prefixes=$(echo "${ip6_prefixes_list}" | grep -vE '^$' | awk -F/ '$2 <= 48 {print $1"/"$2"{"$2","$2"}"}' | tr '\n' ',' | sed 's/,$//')
+		ip4_prefixes=$(echo "${ip4_prefixes_list}" | grep -vE '^$' | awk -F/ '$2 <= 24 {print $1"/"$2"{"$2","$2"}"}' | tr '\n' ',' | sed 's/,$//' || true)
+		ip6_prefixes=$(echo "${ip6_prefixes_list}" | grep -vE '^$' | awk -F/ '$2 <= 48 {print $1"/"$2"{"$2","$2"}"}' | tr '\n' ',' | sed 's/,$//' || true)
 		ip4_filter="ipv4 { import none; };"
 		ip4_num=$(($(echo "${ip4_prefixes_list}" | wc -l)+10))
 		ip6_num=$(($(echo "${ip6_prefixes_list}" | wc -l)+10))
@@ -253,7 +252,7 @@ remove() {
 		rm "/run/bird/VM${vmid}.conf"
 		pkill -HUP bird
 	fi
-	macs=$(echo "${config}" | grep -E '^net[0-9]+: ' | cut -d' ' -f2 | cut -d, -f1 | cut -d= -f2)
+	macs=$(echo "${config}" | grep -E '^net[0-9]+: ' | cut -d' ' -f2 | cut -d, -f1 | cut -d= -f2 || true)
 	firstmac=$(echo "${macs}" | head -n 1)
 	for mac in ${macs}; do
 		ebtables -t broute -D BROUTING -i "${XINTERFACE}" --logical-in vmbr0 -s "${mac}" -j "from_${vmid}" || true
