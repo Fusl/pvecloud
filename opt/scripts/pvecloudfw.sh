@@ -105,6 +105,7 @@ add() {
 	ipset create "${vmid}v4" hash:net
 	ipset create "${vmid}v6" hash:net family inet6
 	#ip address flush dev "tap${vmid}i0"
+	ip link set dev "tap${vmid}i0" address 04:08:15:16:23:42
 	for ip in ${ips}; do
 		#ip=$(urldecode "${ip}")
 		prefix=$(echo "${ip}" | cut -d/ -f2)
@@ -115,11 +116,14 @@ add() {
 			ebtables -t broute -A "from_${vmid}" -p IPv4 --ip-source "${ip}" -j redirect --redirect-target DROP
 			ip neighbour replace "${ip}" dev "${INTERFACE}" lladdr "${firstmac}" nud permanent
 			ip route replace "${ip}" dev "${INTERFACE}" src "${mysrcip}" pref high scope link
+			ip address add "169.254.169.254/32" peer "${ip}" dev "${INTERFACE}" scope link || true
 		elif echo "${ip}" | fgrep -q :; then
 			mysrcip="${mysrcip6}"
 			ipset add "${vmid}v6" "${ip}/56"
 			ebtables -t broute -A "from_${vmid}" -p IPv6 --ip6-source "${ip}/${prefix}" -j redirect --redirect-target DROP
 			ip route replace "${ip}" dev "${INTERFACE}" src "${mysrcip}" pref high
+			ip address del "fe80::1/128" dev "${INTERFACE}" scope link || true
+			ip address add "fe80::1/128" peer "${ip}" dev "${INTERFACE}" scope link || true
 		fi
 	done
 	for gw in ${gw6}; do
